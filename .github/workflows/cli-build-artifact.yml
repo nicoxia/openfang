@@ -1,0 +1,48 @@
+name: Build CLI Artifact
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - '.github/workflows/cli-build-artifact.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cli-macos-x64:
+    name: CLI / macOS x86_64 artifact
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-artifact-x86_64-apple-darwin
+
+      - name: Build CLI
+        run: cargo build --release --target x86_64-apple-darwin --bin openfang
+
+      - name: Package artifact
+        run: |
+          cd target/x86_64-apple-darwin/release
+          tar czf ../../../openfang-x86_64-apple-darwin.tar.gz openfang
+          cd ../../..
+          shasum -a 256 openfang-x86_64-apple-darwin.tar.gz > openfang-x86_64-apple-darwin.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openfang-x86_64-apple-darwin
+          path: |
+            openfang-x86_64-apple-darwin.tar.gz
+            openfang-x86_64-apple-darwin.tar.gz.sha256
+          if-no-files-found: error
