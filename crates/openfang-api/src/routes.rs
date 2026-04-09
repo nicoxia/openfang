@@ -7616,7 +7616,7 @@ pub async fn test_provider(
                 // Find a default model for this provider to use in the test request
                 let model_id = catalog
                     .default_model_for_provider(&name)
-                    .unwrap_or_default();
+                    .unwrap_or_else(|| state.kernel.config.default_model.model.clone());
                 (
                     p.api_key_env.clone(),
                     p.base_url.clone(),
@@ -7625,10 +7625,39 @@ pub async fn test_provider(
                 )
             }
             None => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": format!("Unknown provider '{}'", name)})),
-                );
+                // Custom / unknown provider: fall back to config + naming convention.
+                let env_var = state
+                    .kernel
+                    .config
+                    .provider_api_keys
+                    .get(&name)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        format!("{}_API_KEY", name.to_uppercase().replace('-', "_"))
+                    });
+
+                let base_url = state
+                    .kernel
+                    .config
+                    .provider_urls
+                    .get(&name)
+                    .cloned()
+                    .or_else(|| {
+                        if state.kernel.config.default_model.provider == name {
+                            state.kernel.config.default_model.base_url.clone()
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_default();
+
+                let default_model = if state.kernel.config.default_model.provider == name {
+                    state.kernel.config.default_model.model.clone()
+                } else {
+                    state.kernel.config.default_model.model.clone()
+                };
+
+                (env_var, base_url, true, default_model)
             }
         }
     };
