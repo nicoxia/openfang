@@ -2,7 +2,7 @@
 //!
 //! Resolution order:
 //! 1. Encrypted vault (`~/.openfang/vault.enc`)
-//! 2. Dotenv file (`~/.openfang/.env`)
+//! 2. Dotenv-style files (`~/.openfang/.env`, then `~/.openfang/secrets.env`)
 //! 3. Process environment variable
 //! 4. Interactive prompt (CLI only, when `interactive` is true)
 
@@ -17,20 +17,28 @@ use zeroize::Zeroizing;
 pub struct CredentialResolver {
     /// Reference to the credential vault.
     vault: Option<CredentialVault>,
-    /// Dotenv entries (loaded from `~/.openfang/.env`).
+    /// Dotenv-style entries (loaded from `.env` and `secrets.env`).
     dotenv: HashMap<String, String>,
     /// Whether to prompt interactively as a last resort.
     interactive: bool,
 }
 
 impl CredentialResolver {
-    /// Create a resolver with optional vault and dotenv path.
+    /// Create a resolver with optional dotenv path.
+    ///
+    /// If `<home>/.env` is provided, we also auto-load `<home>/secrets.env`
+    /// and merge it into the same cache. `.env` is loaded first, then
+    /// `secrets.env` overlays it so dashboard-saved provider keys are visible
+    /// to the runtime after restart.
     pub fn new(vault: Option<CredentialVault>, dotenv_path: Option<&Path>) -> Self {
-        let dotenv = if let Some(path) = dotenv_path {
-            load_dotenv(path).unwrap_or_default()
-        } else {
-            HashMap::new()
-        };
+        let mut dotenv = HashMap::new();
+        if let Some(path) = dotenv_path {
+            dotenv.extend(load_dotenv(path).unwrap_or_default());
+            if let Some(parent) = path.parent() {
+                let secrets_path = parent.join("secrets.env");
+                dotenv.extend(load_dotenv(&secrets_path).unwrap_or_default());
+            }
+        }
         Self {
             vault,
             dotenv,
@@ -56,9 +64,9 @@ impl CredentialResolver {
             }
         }
 
-        // 2. Dotenv file
+        // 2. Dotenv-style files (.env / secrets.env)
         if let Some(val) = self.dotenv.get(key) {
-            debug!("Credential '{}' resolved from .env", key);
+            debug!("Credential '{}' resolved from dotenv cache (.env/secrets.env)", key);
             return Some(Zeroizing::new(val.clone()));
         }
 
@@ -127,7 +135,7 @@ impl CredentialResolver {
         }
     }
 
-    /// Clear a credential from the in-memory dotenv cache.
+    /// Clear a credential from the in-memory dotenv-style cache.
     /// Call this when a key is deleted via the dashboard so the resolver
     /// doesn't return a stale value from the boot-time snapshot.
     pub fn clear_dotenv_cache(&mut self, key: &str) {
@@ -215,6 +223,24 @@ SINGLE_QUOTED='single'
         assert_eq!(map.get("SLACK_TOKEN").unwrap(), "xoxb-quoted");
         assert_eq!(map.get("EMPTY").unwrap(), "");
         assert_eq!(map.get("SINGLE_QUOTED").unwrap(), "single");
+    }
+
+    #[test]
+    fn resolver_loads_secrets_env_alongside_dotenv() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let secrets_path = dir.path().join("secrets.env");
+        std::fs::write(&env_path, "FROM_ENV=env_value\nSHARED=env_shared\n").unwrap();
+        std::fs::write(&secrets_path, "FROM_SECRETS=secret_value\nSHARED=secret_shared\n")
+            .unwrap();
+
+        let resolver = CredentialResolver::new(None, Some(&env_path));
+        assert_eq!(resolver.resolve("FROM_ENV").unwrap().as_str(), "env_value");
+        assert_eq!(
+            resolver.resolve("FROM_SECRETS").unwrap().as_str(),
+            "secret_value"
+        );
+        assert_eq!(resolver.resolve("SHARED").unwrap().as_str(), "secret_shared");
     }
 
     #[test]

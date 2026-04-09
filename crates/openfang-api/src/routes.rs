@@ -7662,7 +7662,11 @@ pub async fn test_provider(
         }
     };
 
-    let api_key = std::env::var(&env_var).ok();
+    let api_key = if env_var.is_empty() {
+        None
+    } else {
+        state.kernel.resolve_credential(&env_var)
+    };
     // Only require API key for providers that need one (skip local providers like ollama/vllm/lmstudio)
     if key_required && api_key.is_none() && !env_var.is_empty() {
         return (
