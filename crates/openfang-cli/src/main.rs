@@ -487,6 +487,17 @@ enum ConfigCommands {
         /// Base URL (must start with http:// or https://).
         url: String,
     },
+    /// Set the default model to a specific provider/model pair.
+    SetModel {
+        /// Provider name (built-in or custom).
+        provider: String,
+        /// Model ID.
+        model: String,
+        /// Optional API key env var (e.g. OPENAI_API_KEY).
+        api_key_env: Option<String>,
+        /// Optional base URL override.
+        base_url: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1028,6 +1039,12 @@ fn main() {
             ConfigCommands::DeleteKey { provider } => cmd_config_delete_key(&provider),
             ConfigCommands::TestKey { provider } => cmd_config_test_key(&provider),
             ConfigCommands::SetUrl { provider, url } => cmd_config_set_url(&provider, &url),
+            ConfigCommands::SetModel {
+                provider,
+                model,
+                api_key_env,
+                base_url,
+            } => cmd_config_set_model(&provider, &model, api_key_env.as_deref(), base_url.as_deref()),
         },
         Some(Commands::Chat { agent }) => cmd_quick_chat(cli.config, agent),
         Some(Commands::Status { json }) => cmd_status(cli.config, json),
@@ -5082,6 +5099,51 @@ fn cmd_config_set_url(provider: &str, url: &str) {
     }
 }
 
+fn cmd_config_set_model(
+    provider: &str,
+    model: &str,
+    api_key_env: Option<&str>,
+    base_url: Option<&str>,
+) {
+    let base = require_daemon("config set-model");
+    let client = daemon_client();
+
+    let mut set_path = |path: &str, value: serde_json::Value| {
+        let body = daemon_json(
+            client
+                .post(format!("{base}/api/config/set"))
+                .json(&serde_json::json!({"path": path, "value": value}))
+                .send(),
+        );
+        if body.get("error").is_some() {
+            ui::error(&format!(
+                "Failed to set {}: {}",
+                path,
+                body["error"].as_str().unwrap_or("unknown error")
+            ));
+            std::process::exit(1);
+        }
+    };
+
+    set_path("default_model.provider", serde_json::json!(provider));
+    set_path("default_model.model", serde_json::json!(model));
+
+    if let Some(env) = api_key_env {
+        set_path("default_model.api_key_env", serde_json::json!(env));
+    }
+    if let Some(url) = base_url {
+        set_path("default_model.base_url", serde_json::json!(url));
+    }
+
+    ui::success(&format!("Default model set to: {}/{}", provider, model));
+    if let Some(env) = api_key_env {
+        ui::kv("API key env", env);
+    }
+    if let Some(url) = base_url {
+        ui::kv("Base URL", url);
+    }
+}
+
 /// Try to store a credential in the vault first; silently falls through if vault
 /// is not initialized or cannot be unlocked. The caller should always also
 /// write to dotenv as a fallback.
@@ -5665,7 +5727,7 @@ fn cmd_models_set(model: Option<String>) {
     let body = daemon_json(
         client
             .post(format!("{base}/api/config/set"))
-            .json(&serde_json::json!({"key": "default_model.model", "value": model}))
+            .json(&serde_json::json!({"path": "default_model.model", "value": model}))
             .send(),
     );
     if body.get("error").is_some() {
