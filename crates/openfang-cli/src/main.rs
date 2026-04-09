@@ -477,6 +477,13 @@ enum ConfigCommands {
         /// Provider name.
         provider: String,
     },
+    /// Set or override a provider base URL through the running daemon.
+    SetUrl {
+        /// Provider name (built-in or custom).
+        provider: String,
+        /// Base URL (must start with http:// or https://).
+        url: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1017,6 +1024,7 @@ fn main() {
             ConfigCommands::SetKey { provider } => cmd_config_set_key(&provider),
             ConfigCommands::DeleteKey { provider } => cmd_config_delete_key(&provider),
             ConfigCommands::TestKey { provider } => cmd_config_test_key(&provider),
+            ConfigCommands::SetUrl { provider, url } => cmd_config_set_url(&provider, &url),
         },
         Some(Commands::Chat { agent }) => cmd_quick_chat(cli.config, agent),
         Some(Commands::Status { json }) => cmd_status(cli.config, json),
@@ -5024,6 +5032,36 @@ fn cmd_config_test_key(provider: &str) {
         println!("{}", "FAILED (401/403)".bright_red());
         ui::hint(&format!("Update key: openfang config set-key {provider}"));
         std::process::exit(1);
+    }
+}
+
+fn cmd_config_set_url(provider: &str, url: &str) {
+    let base = require_daemon("config set-url");
+    let client = daemon_client();
+    let resp = daemon_json(
+        client
+            .put(format!("{base}/api/providers/{provider}/url"))
+            .json(&serde_json::json!({"base_url": url}))
+            .send(),
+    );
+
+    if resp.get("error").is_some() {
+        ui::error(&format!(
+            "Failed to set provider URL: {}",
+            resp["error"].as_str().unwrap_or("unknown error")
+        ));
+        std::process::exit(1);
+    }
+
+    ui::success(&format!("Saved provider URL: {provider} -> {url}"));
+    if let Some(reachable) = resp.get("reachable").and_then(|v| v.as_bool()) {
+        ui::kv("Reachable", if reachable { "yes" } else { "no" });
+    }
+    if let Some(latency_ms) = resp.get("latency_ms").and_then(|v| v.as_u64()) {
+        ui::kv("Latency", &format!("{} ms", latency_ms));
+    }
+    if let Some(models) = resp.get("discovered_models").and_then(|v| v.as_array()) {
+        ui::kv("Discovered models", &models.len().to_string());
     }
 }
 
