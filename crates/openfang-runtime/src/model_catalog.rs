@@ -419,6 +419,22 @@ impl ModelCatalog {
         entry.tier = ModelTier::Custom;
         self.models.push(entry);
 
+        // Ensure a provider entry exists for custom-model-only providers.
+        // Without this, models loaded from custom_models.json can be present in
+        // the catalog while the GUI provider dropdown still hides the provider
+        // entirely (because /api/providers is built from self.providers).
+        if self.providers.iter().all(|p| p.id != provider) {
+            self.providers.push(ProviderInfo {
+                id: provider.clone(),
+                display_name: provider.clone(),
+                api_key_env: format!("{}_API_KEY", provider.to_uppercase().replace('-', "_")),
+                base_url: String::new(),
+                key_required: true,
+                auth_status: AuthStatus::Missing,
+                model_count: 0,
+            });
+        }
+
         // Update provider model count
         if let Some(p) = self.providers.iter_mut().find(|p| p.id == provider) {
             p.model_count = self

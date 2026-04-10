@@ -6088,20 +6088,31 @@ pub async fn list_models(
                 }
             }
             if available_only {
-                let provider = catalog.get_provider(&m.provider);
-                if let Some(p) = provider {
-                    if p.auth_status == openfang_types::model_catalog::AuthStatus::Missing {
-                        return false;
-                    }
+                let is_available = catalog
+                    .get_provider(&m.provider)
+                    .map(|p| {
+                        !p.key_required
+                            || (!p.api_key_env.is_empty()
+                                && state.kernel.resolve_credential(&p.api_key_env).is_some())
+                            || p.auth_status
+                                != openfang_types::model_catalog::AuthStatus::Missing
+                    })
+                    .unwrap_or(m.tier == openfang_types::model_catalog::ModelTier::Custom);
+                if !is_available {
+                    return false;
                 }
             }
             true
         })
         .map(|m| {
-            // Custom models from unknown providers are assumed available
             let available = catalog
                 .get_provider(&m.provider)
-                .map(|p| p.auth_status != openfang_types::model_catalog::AuthStatus::Missing)
+                .map(|p| {
+                    !p.key_required
+                        || (!p.api_key_env.is_empty()
+                            && state.kernel.resolve_credential(&p.api_key_env).is_some())
+                        || p.auth_status != openfang_types::model_catalog::AuthStatus::Missing
+                })
                 .unwrap_or(m.tier == openfang_types::model_catalog::ModelTier::Custom);
             serde_json::json!({
                 "id": m.id,
@@ -6175,7 +6186,12 @@ pub async fn get_model(
         Some(m) => {
             let available = catalog
                 .get_provider(&m.provider)
-                .map(|p| p.auth_status != openfang_types::model_catalog::AuthStatus::Missing)
+                .map(|p| {
+                    !p.key_required
+                        || (!p.api_key_env.is_empty()
+                            && state.kernel.resolve_credential(&p.api_key_env).is_some())
+                        || p.auth_status != openfang_types::model_catalog::AuthStatus::Missing
+                })
                 .unwrap_or(m.tier == openfang_types::model_catalog::ModelTier::Custom);
             (
                 StatusCode::OK,
@@ -6249,10 +6265,18 @@ pub async fn list_providers(State(state): State<Arc<AppState>>) -> impl IntoResp
     let mut providers: Vec<serde_json::Value> = Vec::with_capacity(provider_list.len());
 
     for (i, p) in provider_list.iter().enumerate() {
+        let resolved_auth_status = if !p.key_required {
+            openfang_types::model_catalog::AuthStatus::NotRequired
+        } else if !p.api_key_env.is_empty() && state.kernel.resolve_credential(&p.api_key_env).is_some() {
+            openfang_types::model_catalog::AuthStatus::Configured
+        } else {
+            p.auth_status.clone()
+        };
+
         let mut entry = serde_json::json!({
             "id": p.id,
             "display_name": p.display_name,
-            "auth_status": p.auth_status,
+            "auth_status": resolved_auth_status,
             "model_count": p.model_count,
             "key_required": p.key_required,
             "api_key_env": p.api_key_env,
